@@ -8,8 +8,7 @@
     "@zondax/filecoin-signing-tools": "^1.0.0-rc2",
     "bip39": "^3.0.4",
     "ethereumjs-util": "^7.1.4",
-    "ethereumjs-wallet": "^1.0.2",
-    "secp256k1": "^4.0.3"
+    "ethereumjs-wallet": "^1.0.2"
   },
   "type": "module"
 }
