@@ -1,11 +1,15 @@
 const { EventEmitter } = require('events')
-const { hdkey } = require('ethereumjs-wallet');
+const filSigner = require('@zondax/filecoin-signing-tools/js')
 const bip39 = require('@metamask/bip39');
-const fil = require('./wallet')
 
 // Options:
 const hdPathString = `m/44'/461'/0'/0/0`;
 const type = 'Fil HD Key Tree';
+
+const getPrivateKey = (privateKey) => {
+  const jsonKey = JSON.stringify({ Type: 'secp256k1', 'PrivateKey': privateKey })
+  return bin2hex(jsonKey)
+}
 
 class HdKeyring extends EventEmitter {
   constructor(opts = {}) {
@@ -48,6 +52,7 @@ class HdKeyring extends EventEmitter {
     this.mnemonic = null;
     this.root = null;
     this.hdPath = opts.hdPath || hdPathString;
+    this.testnet = opts.testnet !== undefined ? opts.testnet : false
 
     if (opts.mnemonic) {
       this._initFromMnemonic(opts.mnemonic);
@@ -68,28 +73,24 @@ class HdKeyring extends EventEmitter {
     let oldLen = this.wallets.length;
     const newWallets = [];
     for (let i = oldLen; i < numberOfAccounts + oldLen; i++) {
-      const child = this.hdWallet.derivePath(`m/44'/461'/0'/0/${i}`);
-      const wallet = child.getWallet();
+      const path = this.testnet ? `m/44'/1'/0'/0/${i}` : `m/44'/461'/0'/0/${i}`
+      const wallet = filSigner.keyDerive(this.root, path, '');
       newWallets.push(wallet);
       this.wallets.push(wallet);
     }
-    const hexWallets = newWallets.map((w) => {
-      return fil.getAddress(w.getPrivateKey(), this.hdPath);
-    });
+    const hexWallets = newWallets.map((w) => w.address);
     return Promise.resolve(hexWallets);
   }
 
   getAccounts() {
-    return Promise.resolve(
-      this.wallets.map((w) => {
-        return fil.getAddress(w.getPrivateKey(), this.hdPath);
-      }),
-    );
+    return Promise.resolve(this.wallets.map((w) => w.address))
   }
   
-  // tx is an instance of the ethereumjs-transaction class.
+  // tx is an instance of the filecoin-transaction class.
   signTransaction(address, tx, opts = {}) {
-    return Promise.reject('not support')
+    const wallet = this._getWalletForAccount(address)
+    const { Signature } = filSigner.transactionSign(tx, wallet.private_base64)
+    return Promise.resolve(Signature)
   }
   
   // For fil_sign, we need to sign arbitrary data:
@@ -118,7 +119,8 @@ class HdKeyring extends EventEmitter {
   
   // get public key for nacl
   getEncryptionPublicKey(withAccount, opts = {}) {
-    return Promise.reject('not support')
+    const wallet = this._getWalletForAccount(withAccount)
+    return Promise.resolve(wallet.publicKey)
   }
   
   getPrivateKeyFor(address, opts = {}) {
@@ -131,28 +133,27 @@ class HdKeyring extends EventEmitter {
   
   exportAccount(address, opts = {}) {
     const wallet = this._getWalletForAccount(address, opts);
-    return Promise.resolve(fil.getPrivateKey(wallet.getPrivateKey()));
+    return Promise.resolve(getPrivateKey(wallet.private_base64));
   }
   
   removeAccount (address) {
-    if (!this.wallets.map((w) => fil.getAddress(w.getPrivateKey(), this.hdPath).toLowerCase()).includes(address.toLowerCase())) {
+    if (!this.wallets.map((w) => w.address.toLowerCase()).includes(address.toLowerCase())) {
       throw new Error(`Address ${address} not found in this keyring`)
     }
-    this.wallets = this.wallets.filter((w) => fil.getAddress(w.getPrivateKey(), this.hdPath).toLowerCase() !== address.toLowerCase())
+    this.wallets = this.wallets.filter((w) => w.address.toLowerCase() !== address.toLowerCase())
   }
 
   _getWalletForAccount(account, opts = {}) {
     const address = account;
     let wallet = this.wallets.find(
-      (w) =>
-        fil.getAddress(w.getPrivateKey(), this.hdPath) === address,
+      (w) => w.address === address,
     );
     if (!wallet) {
       throw new Error('Fil HD Keyring - Unable to find matching address.');
     }
   
     if (opts.withAppKeyOrigin) { // 这里不对，以后用到了再改吧
-      wallet = { privateKey: fil.getPrivateKey(w.getPrivateKey()), publicKey: fil.getPublicKey(w.getPrivateKey()) };
+      wallet = { privateKey: getPrivateKey(w.private_base64), publicKey: w.public_hexstring };
     }
   
     return wallet;
@@ -188,10 +189,7 @@ class HdKeyring extends EventEmitter {
       this.mnemonic = mnemonic;
     }
 
-    // eslint-disable-next-line node/no-sync
-    const seed = bip39.mnemonicToSeedSync(this.mnemonic);
-    this.hdWallet = hdkey.fromMasterSeed(seed);
-    this.root = this.hdWallet.derivePath(this.hdPath)
+    this.root = this.mnemonic.toString()
   }
 }
 
